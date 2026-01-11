@@ -2,13 +2,44 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { WatchResult, SearchFilters } from "../types";
 
+// Fixed: Initialize strictly using process.env.API_KEY as per guidelines
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+export async function fetchSearchSuggestions(partialQuery: string): Promise<string[]> {
+  if (!partialQuery || partialQuery.length < 2) return [];
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: `Provide a list of 6 movie or TV show titles that start with or are related to "${partialQuery}". Focus on popular and current titles.`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            suggestions: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING }
+            }
+          },
+          required: ["suggestions"]
+        }
+      }
+    });
+
+    const data = JSON.parse(response.text || "{}");
+    return data.suggestions || [];
+  } catch (error) {
+    console.error("Suggestion error:", error);
+    return [];
+  }
+}
+
 export async function fetchWatchAvailability(
   query: string,
   locationInfo: string,
   filters: SearchFilters
 ): Promise<WatchResult> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
-  
   const filterContext = `
     User Preferences:
     - Preferred Services: ${filters.services.length > 0 ? filters.services.join(', ') : 'Any'}
@@ -68,7 +99,6 @@ export async function fetchWatchAvailability(
   const text = response.text || "{}";
   const data = JSON.parse(text);
 
-  // Extract grounding sources for "Where to Watch" citations
   const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
   const sources = groundingChunks
     .filter((chunk: any) => chunk.web)

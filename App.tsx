@@ -1,20 +1,22 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SearchIcon, MapPinIcon, FilterIcon, CloseIcon } from './components/Icons';
 import WatchCard from './components/WatchCard';
 import { AppState, WatchResult, SearchFilters } from './types';
-import { fetchWatchAvailability } from './services/geminiService';
+import { fetchWatchAvailability, fetchSearchSuggestions } from './services/geminiService';
 
 const GENRES = ["Action", "Comedy", "Drama", "Horror", "Sci-Fi", "Thriller", "Documentary", "Animation", "Romance"];
 const SERVICES = ["Netflix", "Disney+", "Prime Video", "HBO Max", "Hulu", "Apple TV+", "Paramount+"];
 
 const App: React.FC = () => {
-  const [state, setState] = useState<AppState>({
+  const [state, setState] = useState<AppState & { suggestions: string[], fetchingSuggestions: boolean }>({
     query: '',
     loading: false,
     result: null,
     error: null,
     showFilters: false,
+    suggestions: [],
+    fetchingSuggestions: false,
     filters: {
       genres: [],
       services: [],
@@ -27,6 +29,10 @@ const App: React.FC = () => {
       coords: null
     }
   });
+
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  // Fixed: Use ReturnType<typeof setTimeout> instead of NodeJS.Timeout to avoid namespace errors in browser environment
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if ("geolocation" in navigator) {
@@ -49,18 +55,47 @@ const App: React.FC = () => {
     }
   }, []);
 
-  const handleSearch = useCallback(async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!state.query.trim()) return;
+  // Handle autocomplete suggestions
+  useEffect(() => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
 
-    setState(prev => ({ ...prev, loading: true, error: null, result: null }));
+    if (state.query.trim().length < 2) {
+      setState(prev => ({ ...prev, suggestions: [], fetchingSuggestions: false }));
+      return;
+    }
+
+    setState(prev => ({ ...prev, fetchingSuggestions: true }));
+
+    debounceTimer.current = setTimeout(async () => {
+      const suggestions = await fetchSearchSuggestions(state.query);
+      setState(prev => ({ ...prev, suggestions, fetchingSuggestions: false }));
+    }, 400);
+
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
+  }, [state.query]);
+
+  const handleSearch = useCallback(async (e?: React.FormEvent, overrideQuery?: string) => {
+    if (e) e.preventDefault();
+    const finalQuery = overrideQuery || state.query;
+    if (!finalQuery.trim()) return;
+
+    setState(prev => ({ 
+      ...prev, 
+      loading: true, 
+      error: null, 
+      result: null, 
+      suggestions: [],
+      query: finalQuery
+    }));
 
     try {
       const locationInfo = state.location.coords 
         ? `lat: ${state.location.coords.latitude}, lng: ${state.location.coords.longitude}` 
         : "my current location";
         
-      const result = await fetchWatchAvailability(state.query, locationInfo, state.filters);
+      const result = await fetchWatchAvailability(finalQuery, locationInfo, state.filters);
       setState(prev => ({ ...prev, result, loading: false }));
     } catch (err: any) {
       console.error(err);
@@ -96,18 +131,20 @@ const App: React.FC = () => {
         </p>
       </div>
 
-      <div className="max-w-3xl mx-auto mb-8">
-        <form onSubmit={handleSearch} className="space-y-4">
+      <div className="max-w-3xl mx-auto mb-8 relative">
+        <form onSubmit={(e) => handleSearch(e)} className="space-y-4 relative z-20">
           <div className="relative group">
             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
               <SearchIcon className="w-5 h-5 text-slate-500 group-focus-within:text-indigo-400 transition-colors" />
             </div>
             <input
+              ref={searchInputRef}
               type="text"
               className="block w-full pl-11 pr-40 py-4 bg-slate-800/40 border border-slate-700 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 transition-all text-base backdrop-blur-md shadow-lg"
               placeholder="Search title (e.g. Inception)..."
               value={state.query}
               onChange={(e) => setState(prev => ({ ...prev, query: e.target.value }))}
+              onBlur={() => setTimeout(() => setState(prev => ({ ...prev, suggestions: [] })), 200)}
               disabled={state.loading}
             />
             <div className="absolute right-2 inset-y-2 flex items-center gap-2">
@@ -128,6 +165,23 @@ const App: React.FC = () => {
               </button>
             </div>
           </div>
+
+          {/* Autocomplete Suggestions */}
+          {state.suggestions.length > 0 && !state.loading && (
+            <div className="absolute top-full left-0 right-0 mt-2 bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden z-50 backdrop-blur-xl animate-in fade-in slide-in-from-top-2 duration-200">
+              {state.suggestions.map((suggestion, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => handleSearch(undefined, suggestion)}
+                  className="w-full text-left px-5 py-3 text-slate-200 hover:bg-indigo-600/20 hover:text-white transition-colors border-b border-slate-700/50 last:border-0 flex items-center justify-between group"
+                >
+                  <span className="font-medium">{suggestion}</span>
+                  <SearchIcon className="w-3.5 h-3.5 text-slate-500 group-hover:text-indigo-400" />
+                </button>
+              ))}
+            </div>
+          )}
 
           {state.showFilters && (
             <div className="bg-slate-800/60 border border-slate-700 rounded-2xl p-6 backdrop-blur-xl animate-in fade-in slide-in-from-top-4 duration-300">
@@ -189,7 +243,7 @@ const App: React.FC = () => {
           )}
         </form>
 
-        <div className="flex items-center justify-center gap-4 mt-4 text-[10px] text-slate-600 uppercase tracking-tighter">
+        <div className="flex items-center justify-center gap-4 mt-4 text-[10px] text-slate-600 uppercase tracking-tighter relative z-10">
           <div className="flex items-center gap-1.5">
             <MapPinIcon className="w-3 h-3" />
             <span>{state.location.coords ? "Location Active" : "Global Search"}</span>
