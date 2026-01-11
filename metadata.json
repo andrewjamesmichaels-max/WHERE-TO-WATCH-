@@ -1,0 +1,7 @@
+{
+  "name": "WHERE TO WATCH?",
+  "description": "Find where to watch any movie or TV show globally or in your local theaters using real-time Google Search grounding.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
